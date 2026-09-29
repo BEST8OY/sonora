@@ -59,10 +59,12 @@ impl Controls {
         }
     }
 
-    pub fn set_playback(&mut self, state: &PlaybackState, at: Duration) {
+    pub fn set_playback(&mut self, state: &PlaybackState, at: Duration, wants_playing: bool) {
         let progress = Some(MediaPosition(at));
         let playback = match state {
-            PlaybackState::Playing | PlaybackState::Loading => MediaPlayback::Playing { progress },
+            PlaybackState::Playing => MediaPlayback::Playing { progress },
+            PlaybackState::Loading if wants_playing => MediaPlayback::Playing { progress },
+            PlaybackState::Loading => MediaPlayback::Paused { progress },
             PlaybackState::Paused => MediaPlayback::Paused { progress },
             PlaybackState::Idle | PlaybackState::Failed(_) => MediaPlayback::Stopped,
         };

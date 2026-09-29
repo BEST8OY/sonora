@@ -26,7 +26,13 @@ enum SignalEvent {
     VolumeChanged,
     ShuffleChanged,
     LoopStatusChanged,
-    CapabilitiesChanged,
+    CapabilitiesChanged {
+        can_play: bool,
+        can_pause: bool,
+        can_seek: bool,
+        can_go_next: bool,
+        can_go_previous: bool,
+    },
     Seeked(i64),
 }
 
@@ -405,12 +411,28 @@ impl Controls {
                     SignalEvent::LoopStatusChanged => {
                         iface.loop_status_changed(emitter).await.ok();
                     }
-                    SignalEvent::CapabilitiesChanged => {
-                        iface.can_play_changed(emitter).await.ok();
-                        iface.can_pause_changed(emitter).await.ok();
-                        iface.can_seek_changed(emitter).await.ok();
-                        iface.can_go_next_changed(emitter).await.ok();
-                        iface.can_go_previous_changed(emitter).await.ok();
+                    SignalEvent::CapabilitiesChanged {
+                        can_play,
+                        can_pause,
+                        can_seek,
+                        can_go_next,
+                        can_go_previous,
+                    } => {
+                        if can_play {
+                            iface.can_play_changed(emitter).await.ok();
+                        }
+                        if can_pause {
+                            iface.can_pause_changed(emitter).await.ok();
+                        }
+                        if can_seek {
+                            iface.can_seek_changed(emitter).await.ok();
+                        }
+                        if can_go_next {
+                            iface.can_go_next_changed(emitter).await.ok();
+                        }
+                        if can_go_previous {
+                            iface.can_go_previous_changed(emitter).await.ok();
+                        }
                     }
                     SignalEvent::Seeked(position) => {
                         PlayerInterface::seeked(emitter, position).await.ok();
@@ -432,21 +454,29 @@ impl Controls {
             None => empty_metadata(),
         };
         let duration = track.map(|t| t.duration).unwrap_or(Duration::ZERO);
-        if let Ok(mut data) = self.data.write() {
+        let changed = if let Ok(mut data) = self.data.write() {
+            let changed = data.metadata != metadata;
             data.metadata = metadata;
             data.current_track_id = current_track_id;
             data.duration = duration;
+            changed
+        } else {
+            false
+        };
+        if changed {
+            self.signals.send(SignalEvent::MetadataChanged).ok();
         }
-        self.signals.send(SignalEvent::MetadataChanged).ok();
     }
 
-    pub fn set_playback(&mut self, state: &PlaybackState, at: Duration) {
+    pub fn set_playback(&mut self, state: &PlaybackState, at: Duration, wants_playing: bool) {
         let status = match state {
-            PlaybackState::Playing | PlaybackState::Loading => "Playing",
+            PlaybackState::Playing => "Playing",
+            PlaybackState::Loading if wants_playing => "Playing",
+            PlaybackState::Loading => "Paused",
             PlaybackState::Paused => "Paused",
             PlaybackState::Idle | PlaybackState::Failed(_) => "Stopped",
         };
-        let is_buffering = matches!(state, PlaybackState::Loading);
+        let is_buffering = matches!(state, PlaybackState::Loading) && wants_playing;
         let status_changed = if let Ok(mut data) = self.data.write() {
             let changed = data.playback_status != status;
             data.playback_status = status;
@@ -527,23 +557,33 @@ impl Controls {
         can_go_next: bool,
         can_go_previous: bool,
     ) {
-        let changed = if let Ok(mut data) = self.data.write() {
-            let changed = data.can_play != can_play
-                || data.can_pause != can_pause
-                || data.can_seek != can_seek
-                || data.can_go_next != can_go_next
-                || data.can_go_previous != can_go_previous;
+        let diff = if let Ok(mut data) = self.data.write() {
+            let diff = (
+                data.can_play != can_play,
+                data.can_pause != can_pause,
+                data.can_seek != can_seek,
+                data.can_go_next != can_go_next,
+                data.can_go_previous != can_go_previous,
+            );
             data.can_play = can_play;
             data.can_pause = can_pause;
             data.can_seek = can_seek;
             data.can_go_next = can_go_next;
             data.can_go_previous = can_go_previous;
-            changed
+            diff
         } else {
-            false
+            (false, false, false, false, false)
         };
-        if changed {
-            self.signals.send(SignalEvent::CapabilitiesChanged).ok();
+        if diff.0 || diff.1 || diff.2 || diff.3 || diff.4 {
+            self.signals
+                .send(SignalEvent::CapabilitiesChanged {
+                    can_play: diff.0,
+                    can_pause: diff.1,
+                    can_seek: diff.2,
+                    can_go_next: diff.3,
+                    can_go_previous: diff.4,
+                })
+                .ok();
         }
     }
 }
