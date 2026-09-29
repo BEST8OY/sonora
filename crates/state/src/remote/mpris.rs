@@ -444,12 +444,18 @@ impl Controls {
             PlaybackState::Paused => "Paused",
             PlaybackState::Idle | PlaybackState::Failed(_) => "Stopped",
         };
-        if let Ok(mut data) = self.data.write() {
+        let status_changed = if let Ok(mut data) = self.data.write() {
+            let changed = data.playback_status != status;
             data.playback_status = status;
             data.position = at;
             data.position_updated_at = Instant::now();
+            changed
+        } else {
+            false
+        };
+        if status_changed {
+            self.signals.send(SignalEvent::PlaybackChanged).ok();
         }
-        self.signals.send(SignalEvent::PlaybackChanged).ok();
     }
 
     pub fn seeked(&mut self, at: Duration) {
@@ -462,17 +468,33 @@ impl Controls {
     }
 
     pub fn set_volume(&mut self, level: f64) {
-        if let Ok(mut data) = self.data.write() {
-            data.volume = level.clamp(0.0, 1.0);
+        let changed = if let Ok(mut data) = self.data.write() {
+            let clamped = level.clamp(0.0, 1.0);
+            if (data.volume - clamped).abs() > f64::EPSILON {
+                data.volume = clamped;
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if changed {
+            self.signals.send(SignalEvent::VolumeChanged).ok();
         }
-        self.signals.send(SignalEvent::VolumeChanged).ok();
     }
 
     pub fn set_shuffle(&mut self, on: bool) {
-        if let Ok(mut data) = self.data.write() {
+        let changed = if let Ok(mut data) = self.data.write() {
+            let changed = data.shuffle != on;
             data.shuffle = on;
+            changed
+        } else {
+            false
+        };
+        if changed {
+            self.signals.send(SignalEvent::ShuffleChanged).ok();
         }
-        self.signals.send(SignalEvent::ShuffleChanged).ok();
     }
 
     pub fn set_repeat(&mut self, repeat: Repeat) {
@@ -481,10 +503,16 @@ impl Controls {
             Repeat::All => "Playlist",
             Repeat::One => "Track",
         };
-        if let Ok(mut data) = self.data.write() {
+        let changed = if let Ok(mut data) = self.data.write() {
+            let changed = data.loop_status != status;
             data.loop_status = status;
+            changed
+        } else {
+            false
+        };
+        if changed {
+            self.signals.send(SignalEvent::LoopStatusChanged).ok();
         }
-        self.signals.send(SignalEvent::LoopStatusChanged).ok();
     }
 
     pub fn set_capabilities(
