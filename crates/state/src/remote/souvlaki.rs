@@ -78,6 +78,16 @@ impl Controls {
     pub fn set_shuffle(&mut self, _on: bool) {}
 
     pub fn set_repeat(&mut self, _repeat: Repeat) {}
+
+    pub fn set_capabilities(
+        &mut self,
+        _can_play: bool,
+        _can_pause: bool,
+        _can_seek: bool,
+        _can_go_next: bool,
+        _can_go_previous: bool,
+    ) {
+    }
 }
 
 fn command(event: MediaControlEvent) -> Option<Command> {
