@@ -33,6 +33,7 @@ enum SignalEvent {
 /// Shared in-memory player state backing the MPRIS D-Bus interfaces.
 struct MprisData {
     playback_status: &'static str,
+    is_buffering: bool,
     position: Duration,
     position_updated_at: Instant,
     duration: Duration,
@@ -53,6 +54,7 @@ impl Default for MprisData {
         let (metadata, current_track_id) = empty_metadata();
         Self {
             playback_status: "Stopped",
+            is_buffering: false,
             position: Duration::ZERO,
             position_updated_at: Instant::now(),
             duration: Duration::ZERO,
@@ -284,7 +286,7 @@ impl PlayerInterface {
             return 0;
         };
         let pos = match data.playback_status {
-            "Playing" => {
+            "Playing" if !data.is_buffering => {
                 let elapsed = data.position_updated_at.elapsed();
                 let total = data.position.saturating_add(elapsed);
                 if data.duration > Duration::ZERO {
@@ -444,9 +446,11 @@ impl Controls {
             PlaybackState::Paused => "Paused",
             PlaybackState::Idle | PlaybackState::Failed(_) => "Stopped",
         };
+        let is_buffering = matches!(state, PlaybackState::Loading);
         let status_changed = if let Ok(mut data) = self.data.write() {
             let changed = data.playback_status != status;
             data.playback_status = status;
+            data.is_buffering = is_buffering;
             data.position = at;
             data.position_updated_at = Instant::now();
             changed
