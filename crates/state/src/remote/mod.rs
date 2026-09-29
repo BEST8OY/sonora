@@ -76,7 +76,6 @@ pub fn attach(hwnd: Option<*mut c_void>, cx: &mut App) {
     let cover = sonora.cover.clone();
     let io = Io::global(cx);
     let remote = cx.new(|cx| Remote::new(controls, receiver, playback, queue, cover, io, cx));
-    remote.update(cx, |remote, cx| remote.publish(cx));
     cx.set_global(Attached { _remote: remote });
 }
 
@@ -88,7 +87,7 @@ pub struct Remote {
     io: Io,
     shown: Option<String>,
     source: Option<String>,
-    reported: Option<PlaybackState>,
+    reported: Option<(PlaybackState, bool)>,
     at: Duration,
     /// When `at` was published, so the next position can be checked against steady playback.
     stamp: Instant,
@@ -203,6 +202,7 @@ impl Remote {
         let playback = self.playback.read(cx);
         let queue = self.queue.read(cx);
         let state = playback.state().clone();
+        let wants_playing = playback.wants_playing();
         let at = playback.position();
         let track = playback.track().cloned();
         let volume = playback.volume();
@@ -253,19 +253,20 @@ impl Remote {
             }
         }
 
-        if self.reported.as_ref() == Some(&state) && self.at.as_secs() == at.as_secs() {
+        let current = (state.clone(), wants_playing);
+        if self.reported.as_ref() == Some(&current) && self.at.as_secs() == at.as_secs() {
             return;
         }
-        let expected = match self.reported {
-            Some(PlaybackState::Playing) => self.at.saturating_add(self.stamp.elapsed()),
+        let expected = match self.reported.as_ref() {
+            Some((PlaybackState::Playing, _)) => self.at.saturating_add(self.stamp.elapsed()),
             _ => self.at,
         };
         let jumped = !moved && at.abs_diff(expected) > SEEK_SLACK;
-        self.reported = Some(state.clone());
+        self.reported = Some(current);
         self.at = at;
         self.stamp = Instant::now();
 
-        self.controls.set_playback(&state, at);
+        self.controls.set_playback(&state, at, wants_playing);
         if jumped {
             self.controls.seeked(at);
         }
