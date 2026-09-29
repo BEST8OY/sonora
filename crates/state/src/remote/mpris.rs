@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -8,7 +9,9 @@ use anyhow::Result;
 use gpui::{App, Task};
 use music::Track;
 use tokio::sync::mpsc;
+use zbus::fdo::Properties;
 use zbus::interface;
+use zbus::names::InterfaceName;
 use zbus::zvariant::{Array, ObjectPath, OwnedValue, Str, Value};
 
 use super::{BUS_NAME, Command, DISPLAY_NAME};
@@ -18,6 +21,7 @@ use crate::{PlaybackState, Repeat};
 const DESKTOP_ENTRY: &str = "sonora";
 const NO_TRACK_PATH: &str = "/org/mpris/MediaPlayer2/TrackList/NoTrack";
 const OBJECT_PATH: &str = "/org/mpris/MediaPlayer2";
+const PLAYER_INTERFACE: &str = "org.mpris.MediaPlayer2.Player";
 
 /// Internal signal events dispatched to emit D-Bus `PropertiesChanged` and `Seeked` signals.
 enum SignalEvent {
@@ -27,11 +31,11 @@ enum SignalEvent {
     ShuffleChanged,
     LoopStatusChanged,
     CapabilitiesChanged {
-        can_play: bool,
-        can_pause: bool,
-        can_seek: bool,
-        can_go_next: bool,
-        can_go_previous: bool,
+        can_play_changed: bool,
+        can_pause_changed: bool,
+        can_seek_changed: bool,
+        can_go_next_changed: bool,
+        can_go_previous_changed: bool,
     },
     Seeked(i64),
 }
@@ -412,26 +416,37 @@ impl Controls {
                         iface.loop_status_changed(emitter).await.ok();
                     }
                     SignalEvent::CapabilitiesChanged {
-                        can_play,
-                        can_pause,
-                        can_seek,
-                        can_go_next,
-                        can_go_previous,
+                        can_play_changed,
+                        can_pause_changed,
+                        can_seek_changed,
+                        can_go_next_changed,
+                        can_go_previous_changed,
                     } => {
-                        if can_play {
-                            iface.can_play_changed(emitter).await.ok();
+                        let mut changed = HashMap::new();
+                        if can_play_changed {
+                            changed.insert("CanPlay", Value::from(iface.can_play()));
                         }
-                        if can_pause {
-                            iface.can_pause_changed(emitter).await.ok();
+                        if can_pause_changed {
+                            changed.insert("CanPause", Value::from(iface.can_pause()));
                         }
-                        if can_seek {
-                            iface.can_seek_changed(emitter).await.ok();
+                        if can_seek_changed {
+                            changed.insert("CanSeek", Value::from(iface.can_seek()));
                         }
-                        if can_go_next {
-                            iface.can_go_next_changed(emitter).await.ok();
+                        if can_go_next_changed {
+                            changed.insert("CanGoNext", Value::from(iface.can_go_next()));
                         }
-                        if can_go_previous {
-                            iface.can_go_previous_changed(emitter).await.ok();
+                        if can_go_previous_changed {
+                            changed.insert("CanGoPrevious", Value::from(iface.can_go_previous()));
+                        }
+                        if !changed.is_empty() {
+                            Properties::properties_changed(
+                                emitter,
+                                InterfaceName::from_static_str_unchecked(PLAYER_INTERFACE),
+                                changed,
+                                Cow::Borrowed(&[]),
+                            )
+                            .await
+                            .ok();
                         }
                     }
                     SignalEvent::Seeked(position) => {
@@ -577,11 +592,11 @@ impl Controls {
         if diff.0 || diff.1 || diff.2 || diff.3 || diff.4 {
             self.signals
                 .send(SignalEvent::CapabilitiesChanged {
-                    can_play: diff.0,
-                    can_pause: diff.1,
-                    can_seek: diff.2,
-                    can_go_next: diff.3,
-                    can_go_previous: diff.4,
+                    can_play_changed: diff.0,
+                    can_pause_changed: diff.1,
+                    can_seek_changed: diff.2,
+                    can_go_next_changed: diff.3,
+                    can_go_previous_changed: diff.4,
                 })
                 .ok();
         }
