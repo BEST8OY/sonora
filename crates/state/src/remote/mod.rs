@@ -50,6 +50,10 @@ enum Command {
     Shuffle(bool),
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     Repeat(Repeat),
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    Raise,
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    Quit,
 }
 
 /// Publishes what plays to the system media controls and carries their requests back. The
@@ -139,39 +143,80 @@ impl Remote {
     }
 
     fn act(&mut self, command: Command, cx: &mut Context<Self>) {
-        self.playback
-            .clone()
-            .update(cx, |playback, cx| match command {
-                Command::Play => playback.resume(cx),
-                Command::Pause => playback.pause(cx),
-                Command::Toggle => playback.toggle_play(cx),
-                Command::Next => playback.next(cx),
-                Command::Previous => playback.previous(cx),
-                Command::Seek(at) => playback.seek(at, cx),
-                Command::Forward(step) => {
+        match command {
+            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+            Command::Raise => {
+                cx.activate(true);
+            }
+            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+            Command::Quit => {
+                cx.quit();
+            }
+            Command::Play => {
+                self.playback.update(cx, |playback, cx| playback.resume(cx));
+            }
+            Command::Pause => {
+                self.playback.update(cx, |playback, cx| playback.pause(cx));
+            }
+            Command::Toggle => {
+                self.playback
+                    .update(cx, |playback, cx| playback.toggle_play(cx));
+            }
+            Command::Next => {
+                self.playback.update(cx, |playback, cx| playback.next(cx));
+            }
+            Command::Previous => {
+                self.playback
+                    .update(cx, |playback, cx| playback.previous(cx));
+            }
+            Command::Seek(at) => {
+                self.playback
+                    .update(cx, |playback, cx| playback.seek(at, cx));
+            }
+            Command::Forward(step) => {
+                self.playback.update(cx, |playback, cx| {
                     shift(playback, playback.position().saturating_add(step), cx)
-                }
-                Command::Back(step) => {
+                });
+            }
+            Command::Back(step) => {
+                self.playback.update(cx, |playback, cx| {
                     shift(playback, playback.position().saturating_sub(step), cx)
-                }
-                Command::Volume(level) => playback.set_volume(level as f32, cx),
-                #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-                Command::Repeat(repeat) => playback.set_repeat(repeat, cx),
-                #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-                Command::Shuffle(on) => {
-                    self.queue.update(cx, |queue, cx| queue.set_shuffle(on, cx))
-                }
-            });
+                });
+            }
+            Command::Volume(level) => {
+                self.playback
+                    .update(cx, |playback, cx| playback.set_volume(level as f32, cx));
+            }
+            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+            Command::Repeat(repeat) => {
+                self.playback
+                    .update(cx, |playback, cx| playback.set_repeat(repeat, cx));
+            }
+            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+            Command::Shuffle(on) => {
+                self.queue.update(cx, |queue, cx| queue.set_shuffle(on, cx));
+            }
+        }
     }
 
     fn publish(&mut self, cx: &mut Context<Self>) {
         let playback = self.playback.read(cx);
+        let queue = self.queue.read(cx);
         let state = playback.state().clone();
         let at = playback.position();
         let track = playback.track().cloned();
         let volume = playback.volume();
         let repeat = playback.repeat();
-        let shuffle = self.queue.read(cx).shuffle();
+        let shuffle = queue.shuffle();
+
+        let can_play = track.is_some() || queue.has_next() || !queue.is_empty();
+        let can_pause = track.is_some();
+        let can_seek = track.as_ref().is_some_and(|t| t.duration > Duration::ZERO);
+        let can_go_next = queue.has_next();
+        let can_go_previous = queue.has_previous();
+
+        self.controls
+            .set_capabilities(can_play, can_pause, can_seek, can_go_next, can_go_previous);
 
         if self.volume != Some(volume) {
             self.volume = Some(volume);
