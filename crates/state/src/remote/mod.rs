@@ -88,7 +88,7 @@ pub struct Remote {
     io: Io,
     shown: Option<String>,
     source: Option<String>,
-    reported: Option<(PlaybackState, bool)>,
+    reported: Option<(PlaybackState, bool, bool)>,
     at: Duration,
     /// When `at` was published, so the next position can be checked against steady playback.
     stamp: Instant,
@@ -204,6 +204,7 @@ impl Remote {
         let queue = self.queue.read(cx);
         let state = playback.state().clone();
         let wants_playing = playback.wants_playing();
+        let clock_running = playback.is_clock_running();
         let at = playback.position();
         let track = playback.track().cloned();
         let volume = playback.volume();
@@ -254,12 +255,12 @@ impl Remote {
             }
         }
 
-        let current = (state.clone(), wants_playing);
+        let current = (state.clone(), wants_playing, clock_running);
         if self.reported.as_ref() == Some(&current) && self.at.as_secs() == at.as_secs() {
             return;
         }
         let expected = match self.reported.as_ref() {
-            Some((PlaybackState::Playing, _)) => self.at.saturating_add(self.stamp.elapsed()),
+            Some((PlaybackState::Playing, _, true)) => self.at.saturating_add(self.stamp.elapsed()),
             _ => self.at,
         };
         let jumped = !moved && at.abs_diff(expected) > SEEK_SLACK;
@@ -267,7 +268,8 @@ impl Remote {
         self.at = at;
         self.stamp = Instant::now();
 
-        self.controls.set_playback(&state, at, wants_playing);
+        self.controls
+            .set_playback(&state, at, wants_playing, clock_running);
         if jumped {
             self.controls.seeked(at);
         }

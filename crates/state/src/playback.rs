@@ -195,6 +195,10 @@ impl LiveClock {
         let blend = (elapsed / self.settle).clamp(0., 1.);
         shifted(self.base, elapsed + self.correction * blend)
     }
+
+    fn is_running(&self) -> bool {
+        self.since.is_some()
+    }
 }
 
 /// Seconds from `from` to `to`, negative when `to` is earlier.
@@ -1811,6 +1815,11 @@ impl Playback {
     /// far. A transport control reads this; anything that follows the sound reads `state`.
     pub fn wants_playing(&self) -> bool {
         self.intent == Intent::Play && self.track.is_some()
+    }
+
+    /// Whether the playback clock is actively running (audio is actively flowing to output).
+    pub fn is_clock_running(&self) -> bool {
+        self.state == PlaybackState::Playing && self.clock.is_running()
     }
 
     /// What a play button for the current track shows. `Some(true)` is pause and `Some(false)`
