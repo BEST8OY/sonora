@@ -9,7 +9,7 @@ use anyhow::Result;
 use gpui::{App, Task};
 use music::Track;
 use tokio::sync::mpsc;
-use zbus::fdo::Properties;
+use zbus::fdo::{Properties, RequestNameFlags, RequestNameReply};
 use zbus::interface;
 use zbus::names::InterfaceName;
 use zbus::zvariant::{Array, ObjectPath, OwnedValue, Str, Value};
@@ -198,8 +198,8 @@ impl PlayerInterface {
         };
     }
 
-    /// Sets playback position. Per MPRIS spec, if position is negative or track_id does not match
-    /// the currently playing track, the call MUST be silently ignored.
+    /// Sets playback position. Per MPRIS spec, if position is negative, greater than the track
+    /// length, or track_id does not match the currently playing track, the call MUST be silently ignored.
     async fn set_position(&self, track_id: ObjectPath<'_>, position: i64) {
         if position < 0 {
             return;
@@ -207,7 +207,12 @@ impl PlayerInterface {
         let Ok(data) = self.data.read() else {
             return;
         };
-        if track_id != data.current_track_id {
+        if track_id.as_str() == NO_TRACK_PATH || track_id != data.current_track_id {
+            return;
+        }
+        if data.duration > Duration::ZERO
+            && Duration::from_micros(position as u64) > data.duration
+        {
             return;
         }
         self.commands
@@ -615,16 +620,34 @@ async fn register_mpris(
         .build()
         .await?;
 
-    let bus_name = match conn.request_name(base_name.as_str()).await {
-        Ok(_) => base_name,
-        Err(err) => {
-            let instance_name = format!("{base_name}.instance{}", std::process::id());
+    let primary_acquired = match conn
+        .request_name_with_flags(
+            base_name.as_str(),
+            RequestNameFlags::DoNotQueue.into(),
+        )
+        .await
+    {
+        Ok(RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner) => true,
+        Ok(reply) => {
             log::info!(
-                "remote: primary mpris name {base_name} unavailable ({err}), trying {instance_name}"
+                "remote: primary mpris name {base_name} unavailable ({reply:?}), trying instance name"
             );
-            conn.request_name(instance_name.as_str()).await?;
-            instance_name
+            false
         }
+        Err(err) => {
+            log::info!(
+                "remote: primary mpris name {base_name} request failed ({err:#}), trying instance name"
+            );
+            false
+        }
+    };
+
+    let bus_name = if primary_acquired {
+        base_name
+    } else {
+        let instance_name = format!("{base_name}.instance{}", std::process::id());
+        conn.request_name(instance_name.as_str()).await?;
+        instance_name
     };
     Ok((conn, bus_name))
 }
@@ -666,11 +689,8 @@ fn metadata(
     };
     if !artists.is_empty() {
         let artist_strs: Vec<Str<'_>> = artists.iter().map(|s| Str::from(s.clone())).collect();
-        if let Ok(val) = OwnedValue::try_from(Value::Array(Array::from(artist_strs.clone()))) {
-            map.insert("xesam:artist".to_string(), val);
-        }
         if let Ok(val) = OwnedValue::try_from(Value::Array(Array::from(artist_strs))) {
-            map.insert("xesam:albumArtist".to_string(), val);
+            map.insert("xesam:artist".to_string(), val);
         }
     }
 
@@ -716,3 +736,4 @@ fn track_id(track: &Track) -> ObjectPath<'static> {
     let path = format!("/app/sonora/track/t{:016x}", hasher.finish());
     ObjectPath::try_from(path).unwrap_or_else(|_| ObjectPath::try_from(NO_TRACK_PATH).unwrap())
 }
+
