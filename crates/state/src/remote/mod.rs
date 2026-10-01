@@ -8,6 +8,7 @@ use gpui::{App, AppContext as _, Context, Entity, Global, Task};
 use music::Track;
 use tokio::sync::mpsc;
 
+use crate::playback::PlaybackEvent;
 use crate::{Cover, Io, Playback, PlaybackState, Queue, Repeat, Sonora, join};
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -119,6 +120,12 @@ impl Remote {
 
         cx.observe(&playback, |this, _, cx| this.publish(cx))
             .detach();
+        cx.subscribe(&playback, |this, _, event, cx| {
+            if let PlaybackEvent::Seeked = event {
+                this.seeked(cx);
+            }
+        })
+        .detach();
         cx.observe(&queue, |this, _, cx| this.publish(cx)).detach();
         // the album art resolves after the track it belongs to, so republish when it lands
         cx.observe(&cover, |this, _, cx| this.publish(cx)).detach();
@@ -175,12 +182,12 @@ impl Remote {
             }
             Command::Forward(step) => {
                 self.playback.update(cx, |playback, cx| {
-                    shift(playback, playback.position().saturating_add(step), cx)
+                    shift(playback, playback.live_position().saturating_add(step), cx)
                 });
             }
             Command::Back(step) => {
                 self.playback.update(cx, |playback, cx| {
-                    shift(playback, playback.position().saturating_sub(step), cx)
+                    shift(playback, playback.live_position().saturating_sub(step), cx)
                 });
             }
             Command::Volume(level) => {
@@ -205,7 +212,7 @@ impl Remote {
         let state = playback.state().clone();
         let wants_playing = playback.wants_playing();
         let clock_running = playback.is_clock_running();
-        let at = playback.position();
+        let at = playback.live_position();
         let track = playback.track().cloned();
         let volume = playback.volume();
         let repeat = playback.repeat();
@@ -263,7 +270,7 @@ impl Remote {
             Some((PlaybackState::Playing, _, true)) => self.at.saturating_add(self.stamp.elapsed()),
             _ => self.at,
         };
-        let jumped = !moved && at.abs_diff(expected) > SEEK_SLACK;
+        let jumped = !moved && !wants_playing && at.abs_diff(expected) > SEEK_SLACK;
         self.reported = Some(current);
         self.at = at;
         self.stamp = Instant::now();
@@ -273,6 +280,12 @@ impl Remote {
         if jumped {
             self.controls.seeked(at);
         }
+    }
+
+    fn seeked(&mut self, cx: &mut Context<Self>) {
+        let at = self.playback.read(cx).live_position();
+        self.publish(cx);
+        self.controls.seeked(at);
     }
 }
 
