@@ -76,6 +76,7 @@ pub fn attach(hwnd: Option<*mut c_void>, cx: &mut App) {
     let cover = sonora.cover.clone();
     let io = Io::global(cx);
     let remote = cx.new(|cx| Remote::new(controls, receiver, playback, queue, cover, io, cx));
+    remote.update(cx, |remote, cx| remote.publish(cx));
     cx.set_global(Attached { _remote: remote });
 }
 
