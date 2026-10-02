@@ -158,7 +158,7 @@ impl Lyrics {
         let music::Lyrics::Synced { lines } = &self.current()?.lyrics else {
             return None;
         };
-        music::lyrics::active(lines, self.playback.read(cx).position())
+        music::lyrics::active(lines, self.playback.read(cx).live_position())
     }
 
     fn follow(&mut self, cx: &mut Context<Self>) {

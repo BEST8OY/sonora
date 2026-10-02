@@ -8,7 +8,7 @@ use gpui::{App, AppContext as _, Context, Entity, Global, Task};
 use music::Track;
 use tokio::sync::mpsc;
 
-use crate::{Cover, Io, Playback, PlaybackState, Queue, Repeat, Sonora, join};
+use crate::{Cover, Io, Playback, PlaybackEvent, PlaybackState, Queue, Repeat, Sonora, join};
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 mod mpris;
@@ -22,9 +22,6 @@ use mpris::Controls;
 
 const BUS_NAME: &str = "sonora";
 const DISPLAY_NAME: &str = "Sonora";
-/// How far the position may stray from where steady playback would have put it before the
-/// widget is told the track was seeked.
-const SEEK_SLACK: Duration = Duration::from_secs(2);
 const ARTWORK: &str = "artwork";
 
 struct Attached {
@@ -88,7 +85,7 @@ pub struct Remote {
     io: Io,
     shown: Option<String>,
     source: Option<String>,
-    reported: Option<(PlaybackState, bool)>,
+    reported: Option<(PlaybackState, bool, bool)>,
     at: Duration,
     /// When `at` was published, so the next position can be checked against steady playback.
     stamp: Instant,
@@ -119,6 +116,11 @@ impl Remote {
 
         cx.observe(&playback, |this, _, cx| this.publish(cx))
             .detach();
+        cx.subscribe(&playback, |this, _, event, cx| match event {
+            PlaybackEvent::Seeked(at) => this.on_seeked(*at, cx),
+            _ => {}
+        })
+        .detach();
         cx.observe(&queue, |this, _, cx| this.publish(cx)).detach();
         // the album art resolves after the track it belongs to, so republish when it lands
         cx.observe(&cover, |this, _, cx| this.publish(cx)).detach();
@@ -140,6 +142,19 @@ impl Remote {
             artwork: None,
             _events,
         }
+    }
+
+    fn on_seeked(&mut self, at: Duration, cx: &mut Context<Self>) {
+        let playback = self.playback.read(cx);
+        let state = playback.state().clone();
+        let wants_playing = playback.wants_playing();
+        let is_seeking = playback.is_seeking();
+        self.reported = Some((state.clone(), wants_playing, is_seeking));
+        self.at = at;
+        self.stamp = Instant::now();
+        self.controls
+            .set_playback(&state, at, wants_playing, is_seeking);
+        self.controls.seeked(at);
     }
 
     fn act(&mut self, command: Command, cx: &mut Context<Self>) {
@@ -175,12 +190,12 @@ impl Remote {
             }
             Command::Forward(step) => {
                 self.playback.update(cx, |playback, cx| {
-                    shift(playback, playback.position().saturating_add(step), cx)
+                    shift(playback, playback.live_position().saturating_add(step), cx)
                 });
             }
             Command::Back(step) => {
                 self.playback.update(cx, |playback, cx| {
-                    shift(playback, playback.position().saturating_sub(step), cx)
+                    shift(playback, playback.live_position().saturating_sub(step), cx)
                 });
             }
             Command::Volume(level) => {
@@ -204,7 +219,8 @@ impl Remote {
         let queue = self.queue.read(cx);
         let state = playback.state().clone();
         let wants_playing = playback.wants_playing();
-        let at = playback.position();
+        let is_seeking = playback.is_seeking();
+        let at = playback.live_position();
         let track = playback.track().cloned();
         let volume = playback.volume();
         let repeat = playback.repeat();
@@ -254,23 +270,17 @@ impl Remote {
             }
         }
 
-        let current = (state.clone(), wants_playing);
-        if self.reported.as_ref() == Some(&current) && self.at.as_secs() == at.as_secs() {
+        let current = (state.clone(), wants_playing, is_seeking);
+        let status_changed = self.reported.as_ref() != Some(&current);
+        if !status_changed && self.at.as_secs() == at.as_secs() {
             return;
         }
-        let expected = match self.reported.as_ref() {
-            Some((PlaybackState::Playing, _)) => self.at.saturating_add(self.stamp.elapsed()),
-            _ => self.at,
-        };
-        let jumped = !moved && at.abs_diff(expected) > SEEK_SLACK;
         self.reported = Some(current);
         self.at = at;
         self.stamp = Instant::now();
 
-        self.controls.set_playback(&state, at, wants_playing);
-        if jumped {
-            self.controls.seeked(at);
-        }
+        self.controls
+            .set_playback(&state, at, wants_playing, is_seeking);
     }
 }
 

@@ -488,7 +488,13 @@ impl Controls {
         }
     }
 
-    pub fn set_playback(&mut self, state: &PlaybackState, at: Duration, wants_playing: bool) {
+    pub fn set_playback(
+        &mut self,
+        state: &PlaybackState,
+        at: Duration,
+        wants_playing: bool,
+        is_seeking: bool,
+    ) {
         let status = match state {
             PlaybackState::Playing => "Playing",
             PlaybackState::Loading if wants_playing => "Playing",
@@ -496,7 +502,7 @@ impl Controls {
             PlaybackState::Paused => "Paused",
             PlaybackState::Idle | PlaybackState::Failed(_) => "Stopped",
         };
-        let is_buffering = matches!(state, PlaybackState::Loading) && wants_playing;
+        let is_buffering = (matches!(state, PlaybackState::Loading) && wants_playing) || is_seeking;
         let status_changed = if let Ok(mut data) = self.data.write() {
             let changed = data.playback_status != status;
             data.playback_status = status;
@@ -516,6 +522,7 @@ impl Controls {
         if let Ok(mut data) = self.data.write() {
             data.position = at;
             data.position_updated_at = Instant::now();
+            data.is_buffering = false;
         }
         let micros = at.as_micros().min(i64::MAX as u128) as i64;
         self.signals.send(SignalEvent::Seeked(micros)).ok();
