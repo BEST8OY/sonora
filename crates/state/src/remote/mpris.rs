@@ -210,8 +210,7 @@ impl PlayerInterface {
         if track_id.as_str() == NO_TRACK_PATH || track_id != data.current_track_id {
             return;
         }
-        if data.duration > Duration::ZERO
-            && Duration::from_micros(position as u64) > data.duration
+        if data.duration > Duration::ZERO && Duration::from_micros(position as u64) > data.duration
         {
             return;
         }
@@ -522,7 +521,6 @@ impl Controls {
         if let Ok(mut data) = self.data.write() {
             data.position = at;
             data.position_updated_at = Instant::now();
-            data.is_buffering = false;
         }
         let micros = at.as_micros().min(i64::MAX as u128) as i64;
         self.signals.send(SignalEvent::Seeked(micros)).ok();
@@ -628,10 +626,7 @@ async fn register_mpris(
         .await?;
 
     let primary_acquired = match conn
-        .request_name_with_flags(
-            base_name.as_str(),
-            RequestNameFlags::DoNotQueue.into(),
-        )
+        .request_name_with_flags(base_name.as_str(), RequestNameFlags::DoNotQueue.into())
         .await
     {
         Ok(RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner) => true,
@@ -743,4 +738,3 @@ fn track_id(track: &Track) -> ObjectPath<'static> {
     let path = format!("/app/sonora/track/t{:016x}", hasher.finish());
     ObjectPath::try_from(path).unwrap_or_else(|_| ObjectPath::try_from(NO_TRACK_PATH).unwrap())
 }
-
