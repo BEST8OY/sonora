@@ -270,9 +270,10 @@ impl Remote {
             }
         }
 
+        let looped = !moved && self.shown.is_some() && at < self.at;
         let current = (state.clone(), wants_playing, is_seeking);
         let status_changed = self.reported.as_ref() != Some(&current);
-        if !status_changed && self.at.as_secs() == at.as_secs() {
+        if !status_changed && !looped && self.at.as_secs() == at.as_secs() {
             return;
         }
         self.reported = Some(current);
@@ -281,6 +282,9 @@ impl Remote {
 
         self.controls
             .set_playback(&state, at, wants_playing, is_seeking);
+        if looped {
+            self.controls.seeked(at);
+        }
     }
 }
 

@@ -522,7 +522,6 @@ impl Controls {
         if let Ok(mut data) = self.data.write() {
             data.position = at;
             data.position_updated_at = Instant::now();
-            data.is_buffering = false;
         }
         let micros = at.as_micros().min(i64::MAX as u128) as i64;
         self.signals.send(SignalEvent::Seeked(micros)).ok();
