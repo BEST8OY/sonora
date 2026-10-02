@@ -242,7 +242,7 @@ pub enum PlaybackEvent {
     EndedPlayback,
     Paused,
     /// The engine landed a seek, playing or paused.
-    Seeked,
+    Seeked(Duration),
 }
 
 /// A one-shot request to pause after wall-clock time or when the current track ends.
@@ -427,6 +427,7 @@ pub struct Playback {
     sleep: Option<Sleep>,
     sleep_task: Option<Task<()>>,
     open: Option<Task<()>>,
+    tick_task: Option<Task<()>>,
 }
 
 impl EventEmitter<PlaybackEvent> for Playback {}
@@ -523,6 +524,7 @@ impl Playback {
             sleep: None,
             sleep_task: None,
             open: None,
+            tick_task: None,
         };
         // Start the local engine at startup so files can play before the first scan.
         if let Some(factory) = playback.session.read(cx).local_playback() {
@@ -1776,6 +1778,7 @@ impl Playback {
         self.intent = Intent::Pause;
         if let Some(engine) = self.active_engine() {
             engine.pause();
+            self.schedule_tick(cx);
             cx.notify();
         }
     }
@@ -1892,6 +1895,8 @@ impl Playback {
             self.position = position;
             self.clock.reset(position, false);
             self.remember(true, cx);
+            cx.emit(PlaybackEvent::Seeked(position));
+            self.schedule_tick(cx);
             cx.notify();
             return;
         }
@@ -1911,8 +1916,12 @@ impl Playback {
                 self.stale_positions = 0;
                 self.send_seek(position);
             }
-            (false, _) => self.send_seek(position),
+            (false, _) => {
+                self.send_seek(position);
+                cx.emit(PlaybackEvent::Seeked(position));
+            }
         }
+        self.schedule_tick(cx);
         cx.notify();
     }
 
@@ -1986,7 +1995,32 @@ impl Playback {
         if total.is_zero() {
             return 0.;
         }
-        (self.position.as_secs_f32() / total.as_secs_f32()).clamp(0., 1.)
+        (self.live_position().as_secs_f32() / total.as_secs_f32()).clamp(0., 1.)
+    }
+
+    pub fn is_seeking(&self) -> bool {
+        self.seek_in_flight.is_some() || self.seek_next.is_some()
+    }
+
+    fn schedule_tick(&mut self, cx: &mut Context<Self>) {
+        if self.state != PlaybackState::Playing || self.is_seeking() {
+            self.tick_task = None;
+            return;
+        }
+        let subsec = self.live_position().subsec_millis() as u64;
+        let remaining_ms = (1000 - (subsec % 1000)).max(10);
+        let wait = Duration::from_millis(remaining_ms + 2);
+
+        self.tick_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(wait).await;
+            this.update(cx, |this, cx| {
+                if this.state == PlaybackState::Playing && !this.is_seeking() {
+                    cx.notify();
+                    this.schedule_tick(cx);
+                }
+            })
+            .ok();
+        }));
     }
 
     pub fn is_loading(&self) -> bool {
@@ -2306,7 +2340,9 @@ impl Playback {
                 self.position = at;
                 self.clock.reset(at, self.state == PlaybackState::Playing);
                 self.remember(true, cx);
-                cx.emit(PlaybackEvent::Seeked);
+                if self.seek_next.is_none() {
+                    cx.emit(PlaybackEvent::Seeked(at));
+                }
                 self.follow_up_seek(cx);
             }
             BackendEvent::Position { at, .. } => {
@@ -2398,6 +2434,7 @@ impl Playback {
                 cx.emit(PlaybackEvent::EndedPlayback);
             }
         }
+        self.schedule_tick(cx);
         cx.notify();
     }
 
@@ -2406,6 +2443,7 @@ impl Playback {
     fn teardown(&mut self, cx: &mut Context<Self>) {
         self.task = None;
         self.engine = None;
+        self.tick_task = None;
 
         if !self.local_active() {
             self.load = None;
