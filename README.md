@@ -1,6 +1,19 @@
 <div align="center">
 
-# Sonora
+<img src="./.github/readme-icon.svg" alt="" width="60" height="60">
+
+<h1>Sonora</h1>
+
+
+<p align="center">
+  <a href="https://sonorahq.org/changelog">Changelog</a>
+  ·
+  <a href="https://sonorahq.org/docs">Docs</a>
+  ·
+  <a href="https://sonorahq.org/docs/roadmap">Roadmap</a>
+  ·
+  <a href="https://sonorahq.org/faq">FAQ</a>
+</p>
 
 [![Build](https://img.shields.io/github/actions/workflow/status/sonorahq/sonora/release.yml?style=flat-square&label=build)](https://github.com/sonorahq/sonora/actions/workflows/release.yml)
 [![License](https://img.shields.io/github/license/sonorahq/sonora?style=flat-square&label=license)](./COPYING)

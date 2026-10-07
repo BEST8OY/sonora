@@ -13,7 +13,10 @@ use state::{
 };
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use ui::WindowFrame;
-use ui::{ActiveTheme as _, Dismiss, Look, Stillness, Theme, ThemeKind, clear_listing};
+use ui::{
+    ActiveTheme as _, Dismiss, Entrance, Look, Stillness, Theme, ThemeKind, clear_listing,
+    entering, veiled,
+};
 
 use crate::chrome::{TitleBar, TitleBarEvent, TitleBarOptions, Toolbar, Tooled};
 use crate::screens::search::SearchView;
@@ -79,6 +82,8 @@ pub struct Root {
     toolbar: Option<Entity<Toolbar>>,
     pending: Option<Focus>,
     navigation_transition: Option<Task<()>>,
+    /// The entrance the shell plays as the window moves into or out of fullscreen.
+    shell_entrance: Option<Entrance>,
     screens: Screens,
     adaptive: Entity<Adaptive>,
     background: Option<gpui::WindowBackgroundAppearance>,
@@ -100,6 +105,7 @@ impl Root {
         cx.observe(&session, |this, session, cx| {
             if matches!(session.read(cx).state(), SessionState::SignedOut) {
                 this.navigation_transition = None;
+                this.shell_entrance = None;
                 this.shells
                     .workspace
                     .update(cx, |workspace, cx| workspace.finish_transition(cx));
@@ -275,6 +281,7 @@ impl Root {
             toolbar: None,
             pending: None,
             navigation_transition: None,
+            shell_entrance: None,
             screens: Screens {
                 home,
                 history,
@@ -457,14 +464,18 @@ impl Root {
 
     fn transition_to(&mut self, destination: Destination, cx: &mut Context<Self>) {
         self.navigation_transition = None;
+        self.shell_entrance = None;
 
-        let changes_shell = matches!(destination, Destination::Fullscreen)
-            || matches!(self.view, RootView::Fullscreen);
-        if changes_shell || cx.reduce_motion() {
+        let fullscreen = matches!(destination, Destination::Fullscreen);
+        let was_fullscreen = matches!(self.view, RootView::Fullscreen);
+        if fullscreen || was_fullscreen || cx.reduce_motion() {
             self.shells
                 .workspace
                 .update(cx, |workspace, cx| workspace.finish_transition(cx));
             self.show(destination, cx);
+            if fullscreen != was_fullscreen && !cx.reduce_motion() {
+                self.reveal_shell(cx);
+            }
             return;
         }
 
@@ -483,6 +494,42 @@ impl Root {
             })
             .ok();
         }));
+    }
+
+    /// Plays the page entrance over the whole shell, for the move into and out of fullscreen.
+    fn reveal_shell(&mut self, cx: &mut Context<Self>) {
+        let entrance = Entrance::start();
+        self.shell_entrance = Some(entrance);
+        self.navigation_transition = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(entrance.span()).await;
+            this.update(cx, |this, cx| {
+                this.navigation_transition = None;
+                this.shell_entrance = None;
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    /// How much of the shell its entrance still hides, asking for the next frame while it runs.
+    /// A see-through window fades the shell itself, so every frame of that fade is a full
+    /// refresh, or the workspace's cached views would replay the opacity they were first
+    /// painted with.
+    fn shell_hidden(&mut self, window: &mut Window, cx: &Context<Self>) -> f32 {
+        let Some(entrance) = self.shell_entrance else {
+            return 0.;
+        };
+        if cx.reduce_motion() {
+            self.shell_entrance = None;
+            return 0.;
+        }
+        if entrance.running() {
+            match cx.theme().transparent {
+                true => window.on_next_frame(|window, _| window.refresh()),
+                false => window.request_animation_frame(),
+            }
+        }
+        entrance.hidden()
     }
 
     /// Loads the screen on show again, which is what a page that gave up while the network was
@@ -727,7 +774,7 @@ impl Render for Root {
         // `PlayerBar` for the top and bottom edges. Rounding the root too keeps its own
         // background quad correct and costs nothing.
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-        let radius = crate::chrome::window_radius(Sonora::global(cx).settings.read(cx));
+        let radius = crate::chrome::window_radius(Sonora::global(cx).settings.read(cx), cx);
         #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
         let radius: Option<gpui::Pixels> = None;
 
@@ -735,6 +782,50 @@ impl Render for Root {
         // the page colour under it would only stack a second alpha beneath that and leave a
         // see-through fullscreen reading nearly solid.
         let ambient = matches!(self.view, RootView::Fullscreen) && ambient::shown(cx);
+
+        // The shell enters the way a page enters the workspace. An opaque window fades it
+        // under a scrim of the page colour, which leaves the workspace's cached views alone,
+        // and a see-through one fades the shell itself. The scrim reaches the bottom corners
+        // of the window, so it rounds them. Fullscreen fades in without the veil. The renderer
+        // drops a backdrop inside a filtered layer, so its frosted controls would show flat
+        // until the veil lifted.
+        let hidden = self.shell_hidden(window, cx);
+        let dissolving = theme.transparent;
+        let veil = matches!(self.view, RootView::Workspace);
+        let shell = match self.view {
+            RootView::Workspace => self.shells.workspace.clone().into_any_element(),
+            RootView::Fullscreen => self.shells.fullscreen.clone().into_any_element(),
+        };
+        let shell = div()
+            .relative()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .when(hidden > 0., |this| match (dissolving, veil) {
+                        (true, true) => entering(this, hidden),
+                        (true, false) => this.opacity(1. - hidden),
+                        (false, true) => veiled(this, hidden),
+                        (false, false) => this,
+                    })
+                    .child(shell),
+            )
+            .when(hidden > 0. && !dissolving, |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .when_some(radius, |this, radius| this.rounded_b(radius))
+                        .bg(theme.background)
+                        .opacity(hidden),
+                )
+            });
 
         let root = div()
             .relative()
@@ -805,12 +896,7 @@ impl Render for Root {
             .when_else(
                 show_sign_in,
                 |this| this.child(div().flex().flex_1().min_h_0().child(self.login.clone())),
-                |this| {
-                    this.child(match self.view {
-                        RootView::Workspace => self.shells.workspace.clone().into_any_element(),
-                        RootView::Fullscreen => self.shells.fullscreen.clone().into_any_element(),
-                    })
-                },
+                |this| this.child(shell),
             );
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         let root = root.child(WindowFrame::new());

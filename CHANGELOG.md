@@ -7,6 +7,38 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.42.1] - 2026-10-02
+
+### Added
+
+- Add or remove individual artists with the + button in the local metadata editor.
+  Each artist name stays intact, including commas, ampersands and featuring text.
+
+### Changed
+
+- Local tracks that have multiple artist tags now show each one as its own artist. Artist names
+  that only differ in capitalization no longer create duplicate entries.
+- The song title and artists in fullscreen have a soft shadow, and the visualizer stops short of
+  them, so they stay readable over bright artwork and tall peaks.
+- Wide blurs behind menus, lyrics and the fullscreen view look smoother and cost less to draw.
+- Opening and closing fullscreen now animates in the same way as switching between pages,
+  instead of cutting straight to the new view.
+- Sonora uses about a third of the memory it did. On Linux it settles around 110 MiB instead of
+  400 MiB.
+
+### Fixed
+
+- A long song title in fullscreen truncates instead of pushing the like button off the edge.
+- Editing a local song's artists returns you to the artist list if the artist page you were
+  viewing no longer has any songs.
+- Scrolling through Home stays smooth as new shelves and their covers come into view.
+- Deleting a playlist or removing it from your library also removes its sidebar pin. Going back
+  no longer shows a stale copy of the playlist.
+- With rounded window corners, fullscreen's background, visualizer and controls band follow the
+  curve instead of filling the corners square. The top and bottom corners now match too.
+- Songs and albums from a Subsonic server show their date added, and sorting by it works.
+- Sliders open at their actual value instead of sitting slightly off until you hover them.
+
 ## [0.42.0] - 2026-09-29
 
 ### Added
@@ -1952,7 +1984,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Initial release: a native Spotify client with playback, an interactive queue, the saved library,
 search, album, playlist, artist and song pages, context menus and adaptive theming.
 
-[unreleased]: https://github.com/sonorahq/sonora/compare/v0.42.0...HEAD
+[unreleased]: https://github.com/sonorahq/sonora/compare/v0.42.1...HEAD
+[0.42.1]: https://github.com/sonorahq/sonora/compare/v0.42.0...v0.42.1
 [0.42.0]: https://github.com/sonorahq/sonora/compare/v0.41.0...v0.42.0
 [0.41.0]: https://github.com/sonorahq/sonora/compare/v0.40.0...v0.41.0
 [0.40.0]: https://github.com/sonorahq/sonora/compare/v0.39.0...v0.40.0

@@ -203,7 +203,7 @@ impl Render for TitleBar {
         #[cfg(target_os = "macos")]
         let traffic_light = false;
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-        let radius = crate::chrome::window_radius(settings);
+        let radius = crate::chrome::window_radius(settings, cx);
         #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
         let radius: Option<Pixels> = None;
 

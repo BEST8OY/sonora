@@ -16,7 +16,7 @@ use ytmusic::{AudioStream, YtMusic};
 
 use crate::audio::Trimmed;
 use crate::engine::{self, Fetch, Loudness};
-use crate::stream::{Plain, Reader, Source, Stream};
+use crate::stream::{PREROLL, Plain, Reader, Source, Stream};
 use crate::trim::{self, Trim};
 use crate::youtube::segments::Segments;
 use crate::{PlaybackConfig, PlaybackEvents, PlaybackFactory, Player};
@@ -177,7 +177,11 @@ async fn attempt_open(api: &YtMusic, id: &str) -> Result<Loaded> {
         .await
         .context("stream preroll timed out")??;
     let (segments, edit) = stream
-        .with(|_, buf| (Segments::read(buf), trim::from_mp4(buf)))
+        .with(|_, spool| {
+            // The index and the edit list sit at the front, inside what the preroll waited for.
+            let front = spool.bytes(0..spool.len().min(PREROLL)).unwrap_or_default();
+            (Segments::read(&front), trim::from_mp4(&front))
+        })
         .unwrap_or_default();
     log::debug!(
         "playback: {id} started, itag {} {} {} kbps, {:.1} MiB, {} segments, in {:?}",
