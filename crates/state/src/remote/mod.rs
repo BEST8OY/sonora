@@ -1,7 +1,7 @@
 use std::ffi::c_void;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use gpui::{App, AppContext as _, Context, Entity, Global, Task};
@@ -87,8 +87,6 @@ pub struct Remote {
     source: Option<String>,
     reported: Option<(PlaybackState, bool, bool)>,
     at: Duration,
-    /// When `at` was published, so the next position can be checked against steady playback.
-    stamp: Instant,
     volume: Option<f32>,
     shuffle: Option<bool>,
     repeat: Option<Repeat>,
@@ -116,9 +114,10 @@ impl Remote {
 
         cx.observe(&playback, |this, _, cx| this.publish(cx))
             .detach();
-        cx.subscribe(&playback, |this, _, event, cx| match event {
-            PlaybackEvent::Seeked(at) => this.on_seeked(*at, cx),
-            _ => {}
+        cx.subscribe(&playback, |this, _, event, cx| {
+            if let PlaybackEvent::Seeked(at) = event {
+                this.on_seeked(*at, cx);
+            }
         })
         .detach();
         cx.observe(&queue, |this, _, cx| this.publish(cx)).detach();
@@ -135,7 +134,6 @@ impl Remote {
             source: None,
             reported: None,
             at: Duration::ZERO,
-            stamp: Instant::now(),
             volume: None,
             shuffle: None,
             repeat: None,
@@ -151,7 +149,6 @@ impl Remote {
         let is_seeking = playback.is_seeking();
         self.reported = Some((state.clone(), wants_playing, is_seeking));
         self.at = at;
-        self.stamp = Instant::now();
         self.controls
             .set_playback(&state, at, wants_playing, is_seeking);
         self.controls.seeked(at);
@@ -168,14 +165,27 @@ impl Remote {
                 cx.quit();
             }
             Command::Play => {
-                self.playback.update(cx, |playback, cx| playback.resume(cx));
+                let has_queued = !self.queue.read(cx).is_empty();
+                self.playback.update(cx, |playback, cx| {
+                    if playback.track().is_some() {
+                        playback.resume(cx);
+                    } else if has_queued {
+                        playback.next(cx);
+                    }
+                });
             }
             Command::Pause => {
                 self.playback.update(cx, |playback, cx| playback.pause(cx));
             }
             Command::Toggle => {
-                self.playback
-                    .update(cx, |playback, cx| playback.toggle_play(cx));
+                let has_queued = !self.queue.read(cx).is_empty();
+                self.playback.update(cx, |playback, cx| {
+                    if playback.track().is_some() {
+                        playback.toggle_play(cx);
+                    } else if has_queued {
+                        playback.next(cx);
+                    }
+                });
             }
             Command::Next => {
                 self.playback.update(cx, |playback, cx| playback.next(cx));
@@ -226,11 +236,11 @@ impl Remote {
         let repeat = playback.repeat();
         let shuffle = queue.shuffle();
 
-        let can_play = track.is_some() || queue.has_next() || !queue.is_empty();
+        let can_play = track.is_some() || !queue.is_empty();
         let can_pause = track.is_some();
         let can_seek = track.as_ref().is_some_and(|t| t.duration > Duration::ZERO);
         let can_go_next = queue.has_next();
-        let can_go_previous = queue.has_previous();
+        let can_go_previous = playback.has_previous(cx);
 
         self.controls
             .set_capabilities(can_play, can_pause, can_seek, can_go_next, can_go_previous);
@@ -277,7 +287,6 @@ impl Remote {
         }
         self.reported = Some(current);
         self.at = at;
-        self.stamp = Instant::now();
 
         self.controls
             .set_playback(&state, at, wants_playing, is_seeking);

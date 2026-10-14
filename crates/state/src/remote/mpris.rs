@@ -519,6 +519,7 @@ impl Controls {
 
     pub fn seeked(&mut self, at: Duration) {
         if let Ok(mut data) = self.data.write() {
+            data.is_buffering = false;
             data.position = at;
             data.position_updated_at = Instant::now();
         }
@@ -671,14 +672,14 @@ fn metadata(
         map.insert("mpris:length".to_string(), val);
     }
     if let Some(art_url) = cover
-        && let Ok(val) = OwnedValue::try_from(Value::Str(Str::from(art_url.to_string())))
+        && let Ok(val) = OwnedValue::try_from(Value::Str(Str::from(art_url)))
     {
         map.insert("mpris:artUrl".to_string(), val);
     }
-    if let Ok(val) = OwnedValue::try_from(Value::Str(Str::from(track.name.clone()))) {
+    if let Ok(val) = OwnedValue::try_from(Value::Str(Str::from(track.name.as_str()))) {
         map.insert("xesam:title".to_string(), val);
     }
-    if let Ok(val) = OwnedValue::try_from(Value::Str(Str::from(track.album.clone()))) {
+    if let Ok(val) = OwnedValue::try_from(Value::Str(Str::from(track.album.as_str()))) {
         map.insert("xesam:album".to_string(), val);
     }
 
@@ -690,7 +691,7 @@ fn metadata(
         Vec::new()
     };
     if !artists.is_empty() {
-        let artist_strs: Vec<Str<'_>> = artists.iter().map(|s| Str::from(s.clone())).collect();
+        let artist_strs: Vec<Str<'_>> = artists.iter().map(|s| Str::from(s.as_str())).collect();
         if let Ok(val) = OwnedValue::try_from(Value::Array(Array::from(artist_strs))) {
             map.insert("xesam:artist".to_string(), val);
         }
@@ -707,12 +708,12 @@ fn metadata(
         map.insert("xesam:discNumber".to_string(), val);
     }
     if let Some(playcount) = track.playcount
-        && let Ok(val) = OwnedValue::try_from(Value::I32(playcount as i32))
+        && let Ok(val) = OwnedValue::try_from(Value::I32(playcount.min(i32::MAX as u64) as i32))
     {
         map.insert("xesam:useCount".to_string(), val);
     }
     if !track.tags.is_empty() {
-        let tag_strs: Vec<Str<'_>> = track.tags.iter().map(|s| Str::from(s.clone())).collect();
+        let tag_strs: Vec<Str<'_>> = track.tags.iter().map(|s| Str::from(s.as_str())).collect();
         if let Ok(val) = OwnedValue::try_from(Value::Array(Array::from(tag_strs))) {
             map.insert("xesam:genre".to_string(), val);
         }
@@ -723,7 +724,7 @@ fn metadata(
 
 fn empty_metadata() -> (HashMap<String, OwnedValue>, ObjectPath<'static>) {
     let mut map = HashMap::new();
-    let track_id = ObjectPath::try_from(NO_TRACK_PATH).unwrap();
+    let track_id = ObjectPath::from_static_str_unchecked(NO_TRACK_PATH);
     if let Ok(val) = OwnedValue::try_from(Value::ObjectPath(track_id.clone())) {
         map.insert("mpris:trackid".to_string(), val);
     }
@@ -734,7 +735,15 @@ fn empty_metadata() -> (HashMap<String, OwnedValue>, ObjectPath<'static>) {
 /// D-Bus object paths, so the path is uniquely hashed into a hex identifier.
 fn track_id(track: &Track) -> ObjectPath<'static> {
     let mut hasher = DefaultHasher::new();
-    track.id.as_ref().unwrap_or(&track.name).hash(&mut hasher);
+    if let Some(id) = &track.id {
+        id.hash(&mut hasher);
+    } else {
+        track.name.hash(&mut hasher);
+        track.artists.hash(&mut hasher);
+        track.album.hash(&mut hasher);
+        track.track_number.hash(&mut hasher);
+    }
     let path = format!("/app/sonora/track/t{:016x}", hasher.finish());
-    ObjectPath::try_from(path).unwrap_or_else(|_| ObjectPath::try_from(NO_TRACK_PATH).unwrap())
+    ObjectPath::try_from(path)
+        .unwrap_or_else(|_| ObjectPath::from_static_str_unchecked(NO_TRACK_PATH))
 }
